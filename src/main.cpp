@@ -76,6 +76,14 @@ static bool drawImageByName(const char* name) {
   return true;
 }
 
+// Draw the splash (the device's idle/home screen). Shown on boot and on RESET,
+// and stays until the host sends a drawing command.
+static void showSplash() {
+  u8g2.clearBuffer();
+  u8g2.drawXBM(0, 0, IMG_W, IMG_H, img_splash);
+  u8g2.sendBuffer();
+}
+
 static void processLine() {
   cur = lineBuf;
   while (*cur == ' ' || *cur == '\t') cur++;
@@ -161,10 +169,10 @@ static void processLine() {
     else if (!strcmp(s, "OFF")) { ledcWrite(BUZZER_CH, 0);        buzzerOffAt = 0; ok(); }
     else err(3, "invalid state");
   } else if (!strcmp(cmd, "RESET")) {
-    u8g2.clearBuffer(); u8g2.sendBuffer();
     ledBlink = false; ledState = false; digitalWrite(LED_PIN, LOW);
     ledcWrite(BUZZER_CH, 0); buzzerOffAt = 0;
     curFont = F_SMALL;
+    showSplash();                            // back to the splash (home screen)
     ok();
   } else if (!strcmp(cmd, "PING")) {
     raw("PONG");
@@ -196,9 +204,7 @@ void setup() {
   u8g2.setContrast(0xFF);
 
   // startup screen: splash until the host sends the first command
-  u8g2.clearBuffer();
-  u8g2.drawXBM(0, 0, IMG_W, IMG_H, img_splash);
-  u8g2.sendBuffer();
+  showSplash();
 
   Serial.println("# display-ctl " FW_VERSION " ready");
 }

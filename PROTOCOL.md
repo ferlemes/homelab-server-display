@@ -78,6 +78,10 @@ SHOW                # now it appears on screen
 Exception: `IMG` draws and **shows immediately** (no `SHOW` needed), since it is
 a full-screen alert/branding image.
 
+On power-up and after `RESET`, the device shows a built-in **splash** (its idle
+"home" screen); it stays until the next drawing command (`TEXT`+`SHOW`, or `IMG`)
+replaces it.
+
 ### Lines and fonts
 
 `TEXT <line>` is positioned by the current font height. Approximate capacity:
@@ -116,7 +120,7 @@ The alignment accepts the short form `L`/`C`/`R` or the full form
 |---------|-------------|
 | `PING` | Replies `PONG` (liveness check) |
 | `VERSION` | Replies `OK display-ctl <version>` |
-| `RESET` | Clear the screen, turn LED and buzzer off, reset to font `SMALL` |
+| `RESET` | Show the splash (home) screen, turn LED and buzzer off, reset to font `SMALL` |
 
 ## 6. Example session
 

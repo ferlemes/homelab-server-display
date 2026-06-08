@@ -107,3 +107,7 @@ and regenerate the header:
   **leaks onto the serial and corrupts the protocol**.
 - **Clean protocol:** `esp_log_level_set("*", ESP_LOG_NONE)` in `setup()` keeps
   ESP-IDF logs out of the command responses.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).

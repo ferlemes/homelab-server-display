@@ -90,6 +90,10 @@ condition holds, inserted right after HOST — so you can see the offender:
 | **MEM TOP** | MEM ≥ 85% | the processes using the most memory (RSS) |
 | **DISK** | disk ≥ 90% | which mount is filling up + used/free |
 
+Each alert detail page is **preceded by the warning/panic image** — a short
+attention flash (`--alert-img-secs`, default 2.5 s) — so the screen about to show
+the problem is announced when you glance at the display.
+
 Alerts (edge-triggered, thresholds in `THRESH`):
 - **warning** (CPU≥85, MEM≥85, DISK≥90, TEMP≥75, or a failed systemd unit):
   `warning` image, beep, slow LED blink. While it **persists** it re-beeps every

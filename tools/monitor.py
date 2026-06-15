@@ -519,6 +519,15 @@ def render_disk_alert(d, m, level, reason):
     d.show()
 
 
+def render_alert_image(d, m, level, reason):
+    """Attention card flashed right before each alert detail page: the warning
+    image at level 1, the panic image at level 2 (IMG renders immediately)."""
+    d.img("panic" if level == 2 else "warning")
+
+
+render_alert_image.alert_image = True            # loop gives it a short dwell
+
+
 PAGES = [render_host, make_simple(page_net), make_simple(page_cpu),
          make_simple(page_disk), make_simple(page_sys)]
 
@@ -531,7 +540,9 @@ def _over_warn(m, key):
 
 def active_pages(m):
     """Base pages, plus one alert page per problem (right after HOST): failed
-    units, and the top CPU/memory consumers or filling disk when over warning."""
+    units, and the top CPU/memory consumers or filling disk when over warning.
+    Each alert detail page is preceded by the warning/panic image so the screen
+    that's about to show the problem is announced."""
     if not m:
         return list(PAGES)
     extra = []
@@ -543,7 +554,10 @@ def active_pages(m):
         extra.append(render_mem_top)
     if _over_warn(m, "disk"):
         extra.append(render_disk_alert)
-    return PAGES[:1] + extra + PAGES[1:]
+    alerts = []
+    for p in extra:
+        alerts += [render_alert_image, p]        # flash the image before each detail
+    return PAGES[:1] + alerts + PAGES[1:]
 
 
 def actuate(d, level, no_alerts):
@@ -584,6 +598,8 @@ def main():
                     help="re-beep interval (s) while panic persists; 0 disables")
     ap.add_argument("--warn-beep-secs", type=float, default=30.0,
                     help="re-beep interval (s) while warning persists; 0 disables")
+    ap.add_argument("--alert-img-secs", type=float, default=2.5,
+                    help="seconds the warning/panic image flashes before each alert page")
     ap.add_argument("--once", action="store_true", help="render one frame and exit")
     args = ap.parse_args()
 
@@ -595,7 +611,8 @@ def main():
     try:
         while True:
             for render in pages:
-                t_end = time.time() + args.page_secs
+                secs = args.alert_img_secs if getattr(render, "alert_image", False) else args.page_secs
+                t_end = time.time() + secs
                 while True:
                     try:
                         m = collect(st, args.disk)
@@ -625,7 +642,7 @@ def main():
                     time.sleep(args.refresh)
                     if time.time() >= t_end:
                         break
-            pages = active_pages(m)
+            pages = active_pages(m)              # recompute once per full cycle
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:

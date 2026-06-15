@@ -238,6 +238,28 @@ def gateway_iface():
     return None, None
 
 
+def link_down(iface):
+    """Carrier/cable state of the gateway interface (the one bearing the default
+    route): True = no carrier (cable unplugged / link down), False = link up,
+    None = unknown (no iface, or it can't report). We check only this interface
+    on purpose — scanning every NIC would false-trigger on idle bridges/down
+    spares. /sys/.../carrier returns EINVAL while the iface is administratively
+    down, so we fall back to operstate in that case."""
+    if not iface:
+        return None
+    base = "/sys/class/net/%s" % iface
+    try:
+        with open(base + "/carrier") as f:
+            return f.read().strip() == "0"
+    except OSError:
+        pass
+    try:
+        with open(base + "/operstate") as f:
+            return f.read().strip() not in ("up", "unknown")
+    except OSError:
+        return None
+
+
 def _estab_on_port(path, port_hex):
     n = 0
     try:
@@ -322,6 +344,7 @@ def collect(st, disk_path):
     top = st["top"].read()
     return {
         "host": socket.gethostname(), "ip": primary_ip(), "gw": gw, "iface": iface,
+        "link_down": link_down(iface),
         "rx": rx, "tx": tx, "cpu": st["cpu"].read(),
         "mem": mem_pct(info), "mem_used": gb(mem_used_bytes(info)),
         "mem_total": gb(info["MemTotal"] * 1024), "swap": swap_pct(info),
@@ -351,7 +374,9 @@ def severity(m):
     chk(m["disk"], "DISK", "%"); chk(m["temp"], "TEMP", "C")
     if m.get("failed"):
         cands.append((1, "%d svc fail" % m["failed"]))
-    if not m.get("ip"):
+    if m.get("link_down"):
+        cands.append((2, "LINK DOWN"))         # cable/carrier on the gateway iface
+    elif not m.get("ip"):
         cands.append((2, "NO NETWORK"))
     if not cands:
         return (0, None)
@@ -362,7 +387,7 @@ def severity(m):
 # ============ pages ============
 def page_net(m):
     return "NET", [
-        "IP  " + (m["ip"] or "no link"),
+        "IP  LINK DOWN" if m.get("link_down") else "IP  " + (m["ip"] or "no link"),
         "gw  " + ((m["gw"] + " " + (m["iface"] or "")) if m["gw"] else "--"),
         "net D%s U%s" % (human_rate(m["rx"]), human_rate(m["tx"])),
         "ssh %s  users %s" % (val(m["ssh"]), val(m["users"])),

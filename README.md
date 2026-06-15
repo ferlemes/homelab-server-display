@@ -74,7 +74,7 @@ Rotating pages (SMALL font, top title + bottom clock/NTP bar):
 | Page | Shows |
 |------|-------|
 | **HOST** | hostname (large) + primary IP |
-| **NET** | primary IP, gateway+iface, RX/TX rate, SSH sessions, logged-in users |
+| **NET** | primary IP (or `LINK DOWN`), gateway+iface, RX/TX rate, SSH sessions, logged-in users |
 | **CPU/MEM** | CPU%, load avg (1/5/15), MEM% + used/total, swap% |
 | **DISK** | mount usage % + used/total, temperature, top-CPU process |
 | **SYSTEM** | uptime, failed systemd units, pending reboot, users/SSH |
@@ -92,8 +92,9 @@ condition holds, inserted right after HOST — so you can see the offender:
 Alerts (edge-triggered, thresholds in `THRESH`):
 - **warning** (CPU≥85, MEM≥85, DISK≥90, TEMP≥75, or a failed systemd unit):
   `warning` image, one beep, slow LED blink.
-- **panic** (CPU≥96, MEM≥95, DISK≥97, TEMP≥88, or **no network**): `panic`
-  image, low beep, fast LED blink.
+- **panic** (CPU≥96, MEM≥95, DISK≥97, TEMP≥88, **no network**, or the gateway
+  interface's **cable/carrier is down** — caught even if a static IP lingers):
+  `panic` image, low beep, fast LED blink.
 
 To run on boot, see [INSTALL.md](INSTALL.md).
 

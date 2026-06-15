@@ -55,6 +55,12 @@ def human_rate(bps):
     return "%.1fT" % b
 
 
+def human_mem(b):
+    """bytes -> compact RAM string (binary units)."""
+    g = b / 1024.0 ** 3
+    return "%.1fG" % g if g >= 1 else "%.0fM" % (b / 1024.0 ** 2)
+
+
 class Cached:
     """Memoize the result for `ttl` seconds (for subprocess-based metrics)."""
     def __init__(self, fn, ttl):
@@ -122,15 +128,18 @@ class NetRate:
 
 
 class TopProc:
-    """Top CPU process over the interval (reads /proc/<pid>/stat)."""
-    def __init__(self):
-        self.prev, self.t = {}, None
+    """Top processes by CPU (over the interval) and by RSS memory, from a single
+    pass over /proc/<pid>/stat. Returns {"cpu": [(comm, pct)...],
+    "mem": [(comm, rss_bytes)...]}, each sorted desc and capped at `n`."""
+    def __init__(self, n=5):
+        self.prev, self.t, self.n = {}, None, n
         self.tck = os.sysconf("SC_CLK_TCK")
+        self.pg = os.sysconf("SC_PAGE_SIZE")
 
     def read(self):
         now = time.time()
         dt = (now - self.t) if self.t else None
-        cur, best = {}, (None, None)
+        cur, cpus, mems = {}, [], []
         for pid in os.listdir("/proc"):
             if not pid.isdigit():
                 continue
@@ -141,15 +150,20 @@ class TopProc:
                 comm = data[data.find("(") + 1:rp]
                 rest = data[rp + 2:].split()
                 tot = int(rest[11]) + int(rest[12])     # utime + stime
+                rss = int(rest[21]) * self.pg           # resident set, bytes
             except Exception:
                 continue
             cur[pid] = (tot, comm)
+            if rss > 0:
+                mems.append((comm, rss))
             if dt and dt > 0 and pid in self.prev:
                 cpu = 100.0 * ((tot - self.prev[pid][0]) / self.tck) / dt
-                if best[1] is None or cpu > best[1]:
-                    best = (comm, cpu)
+                if cpu > 0:
+                    cpus.append((comm, cpu))
         self.prev, self.t = cur, now
-        return best
+        cpus.sort(key=lambda c: -c[1])
+        mems.sort(key=lambda c: -c[1])
+        return {"cpu": cpus[:self.n], "mem": mems[:self.n]}
 
 
 def read_meminfo():
@@ -275,11 +289,12 @@ def _ntp_synced():
         return None
 
 
-def _failed_units():
+def _failed_unit_names():
+    """Names of failed systemd units (e.g. 'nginx.service'); None if unknown."""
     try:
         out = subprocess.run(["systemctl", "--failed", "--no-legend", "--plain"],
                              capture_output=True, text=True, timeout=3)
-        return len([l for l in out.stdout.splitlines() if l.strip()])
+        return [l.split()[0] for l in out.stdout.splitlines() if l.strip()]
     except Exception:
         return None
 
@@ -294,7 +309,7 @@ def _logged_users():
 
 # subprocess-based: cache for 5s so we don't spawn one every refresh
 ntp_synced = Cached(_ntp_synced, 5)
-failed_units = Cached(_failed_units, 5)
+failed_unit_names = Cached(_failed_unit_names, 5)
 logged_users = Cached(_logged_users, 5)
 
 
@@ -303,6 +318,8 @@ def collect(st, disk_path):
     gw, iface = gateway_iface()
     rx, tx = st["net"].read(iface)
     dpct, dused, dtot, dfree = disk_info(disk_path)
+    fu = failed_unit_names()
+    top = st["top"].read()
     return {
         "host": socket.gethostname(), "ip": primary_ip(), "gw": gw, "iface": iface,
         "rx": rx, "tx": tx, "cpu": st["cpu"].read(),
@@ -311,8 +328,10 @@ def collect(st, disk_path):
         "disk": dpct, "diskpath": disk_path, "disk_used": gb(dused),
         "disk_total": gb(dtot), "disk_free": gb(dfree), "temp": temp_c(),
         "up": uptime_s(), "load": loadtuple(), "ntp": ntp_synced(),
-        "failed": failed_units(), "ssh": ssh_sessions(), "users": logged_users(),
-        "reboot": reboot_required(), "top": st["top"].read(),
+        "failed": (len(fu) if fu is not None else None), "failed_list": fu,
+        "ssh": ssh_sessions(), "users": logged_users(),
+        "reboot": reboot_required(), "top": (top["cpu"][0] if top["cpu"] else None),
+        "cpu_top": top["cpu"], "mem_top": top["mem"],
         "clock": time.strftime("%H:%M:%S"),
     }
 
@@ -418,8 +437,88 @@ def render_host(d, m, level, reason):
     d.show()
 
 
+def short_unit(name):
+    """Drop the noisy '.service' suffix; keep other unit types (.timer, .mount)."""
+    return name[:-len(".service")] if name.endswith(".service") else name
+
+
+def render_failed(d, m, level, reason):
+    """Alert page: lists the failed systemd units. Only shown while any is down."""
+    units = m.get("failed_list") or []
+    d.cls()
+    d.font("SMALL")
+    d.text(0, "L", "FAILED")
+    d.text(0, "R", "%d svc" % len(units))
+    rows = [short_unit(u) for u in units]
+    if len(rows) > 5:                            # 5 content lines (1..5) available
+        rows = rows[:4] + ["+%d more" % (len(rows) - 4)]
+    for i, name in enumerate(rows[:5]):
+        d.text(i + 1, "L", name[:21])
+    d.show()
+
+
+def render_cpu_top(d, m, level, reason):
+    """Alert page: processes using the most CPU. Shown only while CPU is high."""
+    d.cls()
+    d.font("SMALL")
+    d.text(0, "L", "CPU TOP")
+    d.text(0, "R", pct(m["cpu"]))
+    for i, (comm, v) in enumerate((m.get("cpu_top") or [])[:5]):
+        d.text(i + 1, "L", ("%-15s %3.0f%%" % (comm[:15], v))[:21])
+    d.show()
+
+
+def render_mem_top(d, m, level, reason):
+    """Alert page: processes using the most memory. Shown only while MEM is high."""
+    d.cls()
+    d.font("SMALL")
+    d.text(0, "L", "MEM TOP")
+    d.text(0, "R", pct(m["mem"]))
+    for i, (comm, rss) in enumerate((m.get("mem_top") or [])[:5]):
+        d.text(i + 1, "L", ("%-14s %s" % (comm[:14], human_mem(rss)))[:21])
+    d.show()
+
+
+def render_disk_alert(d, m, level, reason):
+    """Alert page: the disk that is filling up (mount + usage; no scan)."""
+    d.cls()
+    d.font("SMALL")
+    d.text(0, "L", "DISK")
+    d.text(0, "R", pct(m["disk"]))
+    d.text(1, "L", ("mount %s" % m["diskpath"])[:21])
+    d.text(2, "L", "used %.0f/%.0fG" % (m["disk_used"], m["disk_total"]))
+    d.text(3, "L", "free %.1fG" % m["disk_free"])
+    ntp = "ok" if m["ntp"] else "NO" if m["ntp"] is False else "?"
+    d.text(5, "L", m["clock"])
+    d.text(5, "R", "NTP " + ntp)
+    d.show()
+
+
 PAGES = [render_host, make_simple(page_net), make_simple(page_cpu),
          make_simple(page_disk), make_simple(page_sys)]
+
+
+def _over_warn(m, key):
+    """True when metric `key` is at or above its warning threshold."""
+    v = m.get(key)
+    return v is not None and v >= THRESH[key][0]
+
+
+def active_pages(m):
+    """Base pages, plus one alert page per problem (right after HOST): failed
+    units, and the top CPU/memory consumers or filling disk when over warning."""
+    if not m:
+        return list(PAGES)
+    extra = []
+    if m.get("failed"):
+        extra.append(render_failed)
+    if _over_warn(m, "cpu"):
+        extra.append(render_cpu_top)
+    if _over_warn(m, "mem"):
+        extra.append(render_mem_top)
+    if _over_warn(m, "disk"):
+        extra.append(render_disk_alert)
+    return PAGES[:1] + extra + PAGES[1:]
 
 
 def actuate(d, level, no_alerts):
@@ -462,34 +561,35 @@ def main():
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
     st = {"cpu": CpuMeter(), "net": NetRate(), "top": TopProc()}
     d = open_display(args.port)
-    prev, idx = -1, 0
+    prev = -1
+    pages, m = list(PAGES), None
     try:
         while True:
-            render = PAGES[idx % len(PAGES)]
-            t_end = time.time() + args.page_secs
-            while True:
-                try:
-                    m = collect(st, args.disk)
-                    level, reason = severity(m)
-                    if level != prev:
-                        actuate(d, level, args.no_alerts)
-                        prev = level
-                    render(d, m, level, reason)
-                except DisplayError as e:
-                    print("command error (continuing): %s" % e, file=sys.stderr)
-                except (serial.SerialException, OSError) as e:
-                    print("display dropped, reconnecting: %s" % e, file=sys.stderr)
-                    try: d.close()
-                    except Exception: pass
-                    d = open_display(args.port)
-                    prev = -1
-                    break
-                if args.once:
-                    return
-                time.sleep(args.refresh)
-                if time.time() >= t_end:
-                    break
-            idx += 1
+            for render in pages:
+                t_end = time.time() + args.page_secs
+                while True:
+                    try:
+                        m = collect(st, args.disk)
+                        level, reason = severity(m)
+                        if level != prev:
+                            actuate(d, level, args.no_alerts)
+                            prev = level
+                        render(d, m, level, reason)
+                    except DisplayError as e:
+                        print("command error (continuing): %s" % e, file=sys.stderr)
+                    except (serial.SerialException, OSError) as e:
+                        print("display dropped, reconnecting: %s" % e, file=sys.stderr)
+                        try: d.close()
+                        except Exception: pass
+                        d = open_display(args.port)
+                        prev = -1
+                        break
+                    if args.once:
+                        return
+                    time.sleep(args.refresh)
+                    if time.time() >= t_end:
+                        break
+            pages = active_pages(m)
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:

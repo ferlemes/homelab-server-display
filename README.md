@@ -79,6 +79,16 @@ Rotating pages (SMALL font, top title + bottom clock/NTP bar):
 | **DISK** | mount usage % + used/total, temperature, top-CPU process |
 | **SYSTEM** | uptime, failed systemd units, pending reboot, users/SSH |
 
+When something is wrong, **extra alert pages join the rotation** — only while the
+condition holds, inserted right after HOST — so you can see the offender:
+
+| Alert page | Appears when | Shows |
+|------------|--------------|-------|
+| **FAILED** | ≥1 failed systemd unit | names of the failed units (`+N more` on overflow) |
+| **CPU TOP** | CPU ≥ 85% | the processes using the most CPU |
+| **MEM TOP** | MEM ≥ 85% | the processes using the most memory (RSS) |
+| **DISK** | disk ≥ 90% | which mount is filling up + used/free |
+
 Alerts (edge-triggered, thresholds in `THRESH`):
 - **warning** (CPU≥85, MEM≥85, DISK≥90, TEMP≥75, or a failed systemd unit):
   `warning` image, one beep, slow LED blink.

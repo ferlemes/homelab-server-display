@@ -587,6 +587,41 @@ def open_display(port):
             time.sleep(2)
 
 
+# ============ shutdown ============
+def system_stopping():
+    """True if the OS itself is shutting down/rebooting (vs just this service)."""
+    try:
+        out = subprocess.run(["systemctl", "is-system-running"],
+                             capture_output=True, text=True, timeout=2)
+        return out.stdout.strip() == "stopping"
+    except Exception:
+        return None
+
+
+# descending "powering down" tune (Hz, ms) with a slight ritardando
+SHUTDOWN_TUNE = [(1047, 140), (784, 170), (659, 200), (523, 240), (392, 360)]
+
+
+def shutdown_notify(d):
+    """Show a 'shutting down' screen and play a descending tune (best-effort)."""
+    try:                                   # flush any half-sent line first
+        d.ser.write(b"\n"); d.ser.flush(); d.ser.reset_input_buffer()
+    except Exception:
+        pass
+    try:
+        d.led("OFF")
+        d.cls()
+        d.font("MED"); d.text(1, "C", "Shutting down")
+        d.font("SMALL"); d.text(5, "C", socket.gethostname()[:21])
+        d.show()
+        for freq, ms in SHUTDOWN_TUNE:
+            d.beep(freq, max(1, int(ms * 0.85)))
+            time.sleep(ms / 1000.0)
+        d.buzzer("OFF")
+    except Exception:
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser(description="Host monitor -> display-ctl")
     ap.add_argument("port", nargs="?", default="/dev/ttyACM0")
@@ -603,7 +638,12 @@ def main():
     ap.add_argument("--once", action="store_true", help="render one frame and exit")
     args = ap.parse_args()
 
-    signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+    got_signal = {"n": None}
+    def _on_signal(signum, frame):
+        got_signal["n"] = signum
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
     st = {"cpu": CpuMeter(), "net": NetRate(), "top": TopProc()}
     d = open_display(args.port)
     prev, last_beep = -1, 0.0
@@ -644,7 +684,10 @@ def main():
                         break
             pages = active_pages(m)              # recompute once per full cycle
     except (KeyboardInterrupt, SystemExit):
-        pass
+        # SIGINT (Ctrl-C) always announces; SIGTERM only on a real OS shutdown,
+        # not a plain service stop/restart while the system keeps running.
+        if got_signal["n"] == signal.SIGINT or system_stopping() is not False:
+            shutdown_notify(d)
     finally:
         try:
             d.led("OFF"); d.buzzer("OFF"); d.close()

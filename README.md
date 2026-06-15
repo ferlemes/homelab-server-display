@@ -106,6 +106,12 @@ Alerts (edge-triggered, thresholds in `THRESH`):
   `panic` image, low beep, fast LED blink. While it **persists** it re-beeps every
   `--panic-beep-secs` (default 5 s; `0` disables).
 
+On **shutdown** (the monitor gets `SIGTERM` — sent by systemd on poweroff/reboot
+— or `Ctrl-C`) it shows a *Shutting down* screen and plays a short descending
+tune before exiting; the message stays until the board loses USB power. A plain
+`systemctl stop` while the OS keeps running is treated as a quiet stop, not a
+shutdown.
+
 To run on boot, see [INSTALL.md](INSTALL.md).
 
 ## Change the images
@@ -124,8 +130,8 @@ On power-up the firmware plays a short chime on the buzzer (`src/boot_tune.h`)
 tune ends), then stays silent until the next power-up. Any alert beep is a
 command, so the chime never competes with the monitor.
 
-The default chime is a hand-written C-major fanfare — just `{freq, ms}` pairs
-(`0` = rest) in `src/boot_tune.h`, edit it freely. Two optional tools help build
+The default chime is a hand-written ascending C-major run — just `{freq, ms}`
+pairs (`0` = rest) in `src/boot_tune.h`, edit it freely. Two optional tools help build
 your own:
 
 - `tools/play.py` — play a named tune on the buzzer from the host over the

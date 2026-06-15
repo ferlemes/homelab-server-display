@@ -16,6 +16,7 @@ Usage:
 import argparse
 import array
 import math
+import re
 import subprocess
 import sys
 import wave
@@ -180,9 +181,40 @@ def write_preview(notes, path):
         w.writeframes(buf.tobytes())
 
 
+def parse_header(path):
+    """Read the {freq,ms} pairs back out of a previously generated header."""
+    txt = open(path).read()
+    return [[int(a), int(b)] for a, b in re.findall(r"\{(\d+),\s*(\d+)\}", txt)]
+
+
+def polish(notes, speed, max_note, max_rest, gap):
+    """Liven up a droney extraction: clamp long rests, re-articulate long notes
+    into repeated beats (so they get attacks), and scale by `speed` (>1=faster).
+    All no-ops at their defaults."""
+    out = []
+    for freq, dur in notes:
+        if freq < 50:                            # rest
+            out.append([0, min(dur, max_rest) if max_rest else dur])
+            continue
+        if max_note and dur > max_note:
+            n = int(math.ceil(dur / max_note))
+            beat = dur / n
+            for k in range(n):
+                out.append([freq, max(1, int(round(beat - gap)))])
+                if k < n - 1:
+                    out.append([0, gap])         # brief gap = a fresh attack
+        else:
+            out.append([freq, dur])
+    if speed != 1.0:
+        for nt in out:
+            nt[1] = max(1, int(round(nt[1] / speed)))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description="audio -> ESP32 buzzer melody")
-    ap.add_argument("input")
+    ap.add_argument("input", nargs="?", help="audio file (omit when using --from-tune)")
+    ap.add_argument("--from-tune", help="reprocess an existing {freq,ms} header (no audio decode)")
     ap.add_argument("--start", type=float, default=0.0)
     ap.add_argument("--secs", type=float, default=20.0)
     ap.add_argument("--hp", type=int, default=180, help="highpass Hz (cut bass/kick)")
@@ -190,20 +222,33 @@ def main():
     ap.add_argument("--fmin", type=float, default=120.0)
     ap.add_argument("--fmax", type=float, default=1100.0)
     ap.add_argument("--min-ms", type=int, default=70, help="drop notes shorter than this")
+    # post-processing to liven up a droney extraction (all no-ops by default)
+    ap.add_argument("--speed", type=float, default=1.0, help="tempo multiplier (>1 = faster)")
+    ap.add_argument("--max-note", type=int, default=0, help="re-articulate notes longer than this ms (0=off)")
+    ap.add_argument("--max-rest", type=int, default=0, help="clamp rests to at most this many ms (0=off)")
+    ap.add_argument("--gap", type=int, default=25, help="silence between re-articulated beats")
     ap.add_argument("--name", default="BOOT_TUNE")
     ap.add_argument("--out", default="src/boot_tune.h")
     ap.add_argument("--wav", default="/tmp/boot_tune.wav")
     args = ap.parse_args()
 
-    sig = decode(args.input, args.start, args.secs, args.hp, args.lp)
-    if not sig:
-        print("no audio decoded (ffmpeg produced nothing)", file=sys.stderr)
-        sys.exit(1)
-    midi_track = track(sig, args.fmin, args.fmax)
-    notes = segment(midi_track, args.min_ms)
+    if args.from_tune:
+        notes = parse_header(args.from_tune)
+        src = args.from_tune
+    elif args.input:
+        sig = decode(args.input, args.start, args.secs, args.hp, args.lp)
+        if not sig:
+            print("no audio decoded (ffmpeg produced nothing)", file=sys.stderr)
+            sys.exit(1)
+        notes = segment(track(sig, args.fmin, args.fmax), args.min_ms)
+        src = args.input
+    else:
+        ap.error("give an audio INPUT or --from-tune HEADER")
+
+    notes = polish(notes, args.speed, args.max_note, args.max_rest, args.gap)
     total = sum(d for _, d in notes)
     voiced = sum(1 for f, _ in notes if f)
-    write_header(notes, args.name, args.out, args.input)
+    write_header(notes, args.name, args.out, src)
     write_preview(notes, args.wav)
     print("notes: %d (%d voiced, %d rests)  total %.1fs" %
           (len(notes), voiced, len(notes) - voiced, total / 1000.0))

@@ -580,13 +580,17 @@ def main():
     ap.add_argument("--refresh", type=float, default=1.0, help="refresh within a page")
     ap.add_argument("--disk", default="/")
     ap.add_argument("--no-alerts", action="store_true")
+    ap.add_argument("--panic-beep-secs", type=float, default=5.0,
+                    help="re-beep interval (s) while panic persists; 0 disables")
+    ap.add_argument("--warn-beep-secs", type=float, default=30.0,
+                    help="re-beep interval (s) while warning persists; 0 disables")
     ap.add_argument("--once", action="store_true", help="render one frame and exit")
     args = ap.parse_args()
 
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
     st = {"cpu": CpuMeter(), "net": NetRate(), "top": TopProc()}
     d = open_display(args.port)
-    prev = -1
+    prev, last_beep = -1, 0.0
     pages, m = list(PAGES), None
     try:
         while True:
@@ -596,9 +600,16 @@ def main():
                     try:
                         m = collect(st, args.disk)
                         level, reason = severity(m)
+                        now = time.time()
                         if level != prev:
-                            actuate(d, level, args.no_alerts)
+                            actuate(d, level, args.no_alerts)   # beeps on entry
                             prev = level
+                            last_beep = now
+                        elif level >= 1 and not args.no_alerts:
+                            iv = args.panic_beep_secs if level == 2 else args.warn_beep_secs
+                            if iv > 0 and now - last_beep >= iv:   # nag while it persists
+                                d.beep(1500, 500) if level == 2 else d.beep(2000, 200)
+                                last_beep = now
                         render(d, m, level, reason)
                     except DisplayError as e:
                         print("command error (continuing): %s" % e, file=sys.stderr)

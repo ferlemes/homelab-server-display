@@ -65,8 +65,9 @@ stdlib (reads `/proc`, `/sys`; uses `timedatectl`/`systemctl`/`who` if present).
 # run (Ctrl+C to quit; exits with LED/buzzer off)
 sg dialout -c '~/.pio-venv/bin/python ~/esp32/server-display/tools/monitor.py /dev/ttyACM0'
 
-~/.pio-venv/bin/python tools/monitor.py --once          # one frame and exit
-~/.pio-venv/bin/python tools/monitor.py --no-alerts     # no LED/buzzer
+~/.pio-venv/bin/python tools/monitor.py --once             # one frame and exit
+~/.pio-venv/bin/python tools/monitor.py --no-alerts        # no LED/buzzer
+~/.pio-venv/bin/python tools/monitor.py --panic-beep-secs 3   # nag faster in panic
 ```
 
 Rotating pages (SMALL font, top title + bottom clock/NTP bar):
@@ -91,10 +92,12 @@ condition holds, inserted right after HOST — so you can see the offender:
 
 Alerts (edge-triggered, thresholds in `THRESH`):
 - **warning** (CPU≥85, MEM≥85, DISK≥90, TEMP≥75, or a failed systemd unit):
-  `warning` image, one beep, slow LED blink.
+  `warning` image, beep, slow LED blink. While it **persists** it re-beeps every
+  `--warn-beep-secs` (default 30 s; `0` disables).
 - **panic** (CPU≥96, MEM≥95, DISK≥97, TEMP≥88, **no network**, or the gateway
   interface's **cable/carrier is down** — caught even if a static IP lingers):
-  `panic` image, low beep, fast LED blink.
+  `panic` image, low beep, fast LED blink. While it **persists** it re-beeps every
+  `--panic-beep-secs` (default 5 s; `0` disables).
 
 To run on boot, see [INSTALL.md](INSTALL.md).
 

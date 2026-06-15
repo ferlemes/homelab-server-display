@@ -119,24 +119,22 @@ and regenerate the header:
 
 ## Boot melody
 
-On power-up the firmware plays a short melody on the buzzer (`src/boot_tune.h`),
-looping it until the host sends its **first command** — after that it stays
-silent until the next power-up. Any alert beep is a command, so the tune never
-competes with the monitor.
+On power-up the firmware plays a short chime on the buzzer (`src/boot_tune.h`)
+**once**; it stops as soon as the host sends its **first command** (or when the
+tune ends), then stays silent until the next power-up. Any alert beep is a
+command, so the chime never competes with the monitor.
 
-The melody is generated from an audio file by `tools/mp3_to_tune.py` (ffmpeg +
-stdlib only: it extracts a monophonic pitch line with a small YIN tracker, snaps
-it to notes, and writes the `{freq, ms}` header plus a square-wave **preview
-WAV** so you can listen before flashing). Extracting one note line from a full
-mix is rough by design — preview and tweak, or hand-edit the header.
+The default chime is a hand-written C-major fanfare — just `{freq, ms}` pairs
+(`0` = rest) in `src/boot_tune.h`, edit it freely. Two optional tools help build
+your own:
 
-```bash
-python tools/mp3_to_tune.py song.mp3 --secs 15 --out src/boot_tune.h
-aplay /tmp/boot_tune.wav        # listen, then rebuild + flash
-```
-
-You can also play tunes from the host over the protocol with `tools/play.py`
-(e.g. `python tools/play.py /dev/ttyACM0 ode`).
+- `tools/play.py` — play a named tune on the buzzer from the host over the
+  protocol (e.g. `python tools/play.py /dev/ttyACM0 ode`).
+- `tools/mp3_to_tune.py` — turn an audio file into `src/boot_tune.h` (ffmpeg +
+  stdlib: a small YIN tracker extracts a monophonic line and writes the header
+  plus a square-wave preview WAV). Extracting one note line from a full mix is
+  rough — preview, tweak (`--start/--secs/--speed/--max-note`), or `--from-tune`
+  to re-polish an existing header. Rebuild and flash after changing the header.
 
 ## Technical notes (lessons learned)
 

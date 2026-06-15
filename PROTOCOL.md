@@ -82,9 +82,9 @@ On power-up and after `RESET`, the device shows a built-in **splash** (its idle
 "home" screen); it stays until the next drawing command (`TEXT`+`SHOW`, or `IMG`)
 replaces it.
 
-On **power-up** the device also plays a short melody on the buzzer; it stops as
-soon as the first command is received and does not play again until the next
-power-up (`RESET` does not restart it).
+On **power-up** the device also plays a short melody on the buzzer **once**; it
+stops as soon as the first command is received (or when the tune ends) and does
+not play again until the next power-up (`RESET` does not restart it).
 
 ### Lines and fonts
 

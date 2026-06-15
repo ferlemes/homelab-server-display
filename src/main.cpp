@@ -39,8 +39,8 @@ bool     ledBlink = false, ledState = false;
 uint32_t ledPeriod = 500, ledLastToggle = 0;
 
 // ---- Boot melody ----
-// Plays on the buzzer from power-up, looping, until the FIRST command arrives;
-// then it stays silent until the next power-up (see src/boot_tune.h).
+// Plays on the buzzer ONCE from power-up; the FIRST command (or finishing the
+// tune) stops it, after which it stays silent until the next power-up.
 bool     bootTuneOn = true;
 uint16_t bootIdx = 0;
 uint32_t bootNoteEnd = 0;
@@ -221,15 +221,20 @@ void setup() {
 }
 
 void loop() {
-  // 0) boot melody: step through the notes (looping) until the first command
+  // 0) boot melody: step through the notes ONCE, then go silent for good. The
+  //    first command stops it early; either way it never plays again.
   if (bootTuneOn && (int32_t)(millis() - bootNoteEnd) >= 0) {
-    if (bootIdx >= BOOT_TUNE_LEN) bootIdx = 0;       // loop while still idle
-    uint16_t f = BOOT_TUNE[bootIdx][0];
-    uint16_t d = BOOT_TUNE[bootIdx][1];
-    if (f >= 50) ledcWriteTone(BUZZER_CH, f);
-    else         ledcWrite(BUZZER_CH, 0);            // rest
-    bootNoteEnd = millis() + d;
-    bootIdx++;
+    if (bootIdx >= BOOT_TUNE_LEN) {                  // finished -> silent for good
+      bootTuneOn = false;
+      ledcWrite(BUZZER_CH, 0);
+    } else {
+      uint16_t f = BOOT_TUNE[bootIdx][0];
+      uint16_t d = BOOT_TUNE[bootIdx][1];
+      if (f >= 50) ledcWriteTone(BUZZER_CH, f);
+      else         ledcWrite(BUZZER_CH, 0);          // rest
+      bootNoteEnd = millis() + d;
+      bootIdx++;
+    }
   }
 
   // 1) read lines from serial and process them

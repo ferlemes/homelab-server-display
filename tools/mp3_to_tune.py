@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""Convert an audio file (anything ffmpeg can read) into a monophonic buzzer
+melody for the ESP32: a pitch track extracted with a small YIN detector, snapped
+to equal-tempered notes, then emitted as a C header ({freq_hz, ms} pairs) plus a
+square-wave preview WAV so you can HEAR it before flashing.
+
+Pure standard library + ffmpeg (no numpy). Extracting a single melody line from a
+full mix is rough by nature — preview, then tweak --start/--secs/--hp/--lp or
+hand-edit the resulting header.
+
+Usage:
+    python tools/mp3_to_tune.py INPUT [--start 0] [--secs 20]
+        [--hp 180] [--lp 2200] [--fmin 120] [--fmax 1100]
+        [--name BOOT_TUNE] [--out src/boot_tune.h] [--wav /tmp/boot_tune.wav]
+"""
+import argparse
+import array
+import math
+import subprocess
+import sys
+import wave
+
+SR = 8000                 # analysis sample rate (Nyquist 4 kHz covers the melody)
+FRAME = 1024              # ~128 ms analysis window
+HOP = 256                 # ~32 ms between frames
+
+
+def decode(path, start, secs, hp, lp):
+    """ffmpeg -> mono SR PCM (band-passed to bias toward the melody)."""
+    af = "highpass=f=%d,lowpass=f=%d" % (hp, lp)
+    cmd = ["ffmpeg", "-v", "error", "-ss", str(start), "-t", str(secs),
+           "-i", path, "-ac", "1", "-ar", str(SR), "-af", af,
+           "-f", "s16le", "pipe:1"]
+    raw = subprocess.run(cmd, capture_output=True, check=True).stdout
+    a = array.array("h")
+    a.frombytes(raw)
+    return a
+
+
+def yin(frame, fmin, fmax, thresh=0.15):
+    """YIN fundamental for one frame -> Hz, or None if unvoiced/uncertain."""
+    n = len(frame)
+    tau_min = max(2, int(SR / fmax))
+    tau_max = min(n - 1, int(SR / fmin))
+    win = n - tau_max                       # samples compared at every lag
+    if win <= 0:
+        return None
+    d = [0.0] * (tau_max + 1)
+    for tau in range(tau_min, tau_max + 1):
+        s = 0.0
+        for j in range(win):
+            diff = frame[j] - frame[j + tau]
+            s += diff * diff
+        d[tau] = s
+    # cumulative mean normalized difference
+    run = 0.0
+    dp = [1.0] * (tau_max + 1)
+    for tau in range(tau_min, tau_max + 1):
+        run += d[tau]
+        dp[tau] = d[tau] * (tau - tau_min + 1) / run if run > 0 else 1.0
+    best, bestv = tau_min, dp[tau_min]
+    chosen = None
+    for tau in range(tau_min, tau_max + 1):
+        if dp[tau] < bestv:
+            best, bestv = tau, dp[tau]
+        if dp[tau] < thresh:
+            while tau + 1 <= tau_max and dp[tau + 1] < dp[tau]:
+                tau += 1
+            chosen = tau
+            break
+    if chosen is None:
+        chosen, bestv = best, dp[best]
+    if bestv > 0.45:                        # not periodic enough -> rest
+        return None
+    return SR / chosen
+
+
+def rms(frame):
+    return math.sqrt(sum(x * x for x in frame) / len(frame)) if frame else 0.0
+
+
+def track(sig, fmin, fmax):
+    """Per-hop (midi_or_None) pitch track with an energy gate for rests."""
+    frames = [sig[i:i + FRAME] for i in range(0, len(sig) - FRAME, HOP)]
+    energies = [rms(f) for f in frames]
+    gate = 0.12 * (sorted(energies)[int(0.9 * len(energies))] if energies else 0)
+    track = []
+    for f, e in zip(frames, energies):
+        if e < gate:
+            track.append(None)
+            continue
+        hz = yin(f, fmin, fmax)
+        track.append(round(69 + 12 * math.log2(hz / 440.0)) if hz else None)
+    # median-of-3 smoothing over voiced runs to kill single-frame jitter
+    out = list(track)
+    for i in range(1, len(track) - 1):
+        a, b, c = track[i - 1], track[i], track[i + 1]
+        if None not in (a, b, c):
+            out[i] = sorted((a, b, c))[1]
+    return out
+
+
+def segment(midi_track, min_ms):
+    """Collapse the per-hop track into [(freq_hz, ms)] notes (0 Hz = rest)."""
+    hop_ms = 1000.0 * HOP / SR
+    notes = []
+    i, n = 0, len(midi_track)
+    while i < n:
+        j = i
+        while j < n and midi_track[j] == midi_track[i]:
+            j += 1
+        midi, dur = midi_track[i], int(round((j - i) * hop_ms))
+        freq = 0 if midi is None else int(round(440.0 * 2 ** ((midi - 69) / 12.0)))
+        notes.append([freq, dur])
+        i = j
+    # drop too-short blips by folding their time into the previous note
+    out = []
+    for freq, dur in notes:
+        if dur < min_ms and out:
+            out[-1][1] += dur
+        else:
+            out.append([freq, dur])
+    # merge adjacent identical pitches that survived
+    merged = []
+    for freq, dur in out:
+        if merged and merged[-1][0] == freq:
+            merged[-1][1] += dur
+        else:
+            merged.append([freq, dur])
+    # strip leading/trailing silence so the loop is tight
+    while merged and merged[0][0] == 0:
+        merged.pop(0)
+    while merged and merged[-1][0] == 0:
+        merged.pop()
+    return merged
+
+
+def write_header(notes, name, path, src):
+    lines = [
+        "// Generated by tools/mp3_to_tune.py from %s — do not edit by hand." % src,
+        "// Monophonic boot melody for the passive buzzer: {frequency_hz, ms}.",
+        "// A frequency of 0 is a rest (silence).",
+        "#pragma once",
+        "#include <stdint.h>",
+        "",
+        "static const uint16_t %s[][2] = {" % name,
+    ]
+    row = "  "
+    for freq, dur in notes:
+        cell = "{%d,%d}, " % (freq, min(dur, 65535))
+        if len(row) + len(cell) > 96:
+            lines.append(row.rstrip())
+            row = "  "
+        row += cell
+    if row.strip():
+        lines.append(row.rstrip())
+    lines.append("};")
+    lines.append("static const uint16_t %s_LEN = %d;" % (name, len(notes)))
+    lines.append("")
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+
+
+def write_preview(notes, path):
+    """Render the notes as square waves so you can listen on a PC."""
+    rate = 22050
+    buf = array.array("h")
+    for freq, dur in notes:
+        ns = int(rate * dur / 1000.0)
+        if freq < 50:
+            buf.extend([0] * ns)
+            continue
+        period = rate / freq
+        for k in range(ns):
+            buf.append(7000 if (k % period) < period / 2 else -7000)
+    with wave.open(path, "w") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(buf.tobytes())
+
+
+def main():
+    ap = argparse.ArgumentParser(description="audio -> ESP32 buzzer melody")
+    ap.add_argument("input")
+    ap.add_argument("--start", type=float, default=0.0)
+    ap.add_argument("--secs", type=float, default=20.0)
+    ap.add_argument("--hp", type=int, default=180, help="highpass Hz (cut bass/kick)")
+    ap.add_argument("--lp", type=int, default=2200, help="lowpass Hz (cut cymbals)")
+    ap.add_argument("--fmin", type=float, default=120.0)
+    ap.add_argument("--fmax", type=float, default=1100.0)
+    ap.add_argument("--min-ms", type=int, default=70, help="drop notes shorter than this")
+    ap.add_argument("--name", default="BOOT_TUNE")
+    ap.add_argument("--out", default="src/boot_tune.h")
+    ap.add_argument("--wav", default="/tmp/boot_tune.wav")
+    args = ap.parse_args()
+
+    sig = decode(args.input, args.start, args.secs, args.hp, args.lp)
+    if not sig:
+        print("no audio decoded (ffmpeg produced nothing)", file=sys.stderr)
+        sys.exit(1)
+    midi_track = track(sig, args.fmin, args.fmax)
+    notes = segment(midi_track, args.min_ms)
+    total = sum(d for _, d in notes)
+    voiced = sum(1 for f, _ in notes if f)
+    write_header(notes, args.name, args.out, args.input)
+    write_preview(notes, args.wav)
+    print("notes: %d (%d voiced, %d rests)  total %.1fs" %
+          (len(notes), voiced, len(notes) - voiced, total / 1000.0))
+    print("header : %s" % args.out)
+    print("preview: %s   (play it to judge before flashing)" % args.wav)
+
+
+if __name__ == "__main__":
+    main()

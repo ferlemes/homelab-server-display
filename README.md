@@ -26,12 +26,15 @@ Full details and diagrams in [WIRING.md](WIRING.md).
 ```
 src/main.cpp      firmware: command parser + ACK, fonts, images, LED, buzzer
 src/images.h      1-bit bitmaps (splash, warning, panic) — generated
+src/boot_tune.h   boot melody for the buzzer ({freq,ms}) — generated
 PROTOCOL.md       serial protocol spec (client reference)
 WIRING.md         how to wire the display, LED and buzzer
 INSTALL.md        deploy the monitor as a systemd service
 tools/gen_images.py   PNG -> src/images.h
 tools/displayctl.py   reference Python client + demo
 tools/monitor.py      daemon: host metrics -> display (with alerts)
+tools/mp3_to_tune.py  audio file -> src/boot_tune.h (+ preview WAV)
+tools/play.py         play a tune on the buzzer over the protocol
 splash.png warning.png panic.png   source art (2:1) for the images
 ```
 
@@ -113,6 +116,27 @@ and regenerate the header:
 ```bash
 ~/.pio-venv/bin/python tools/gen_images.py   # -> src/images.h + /tmp/images_preview.png
 ```
+
+## Boot melody
+
+On power-up the firmware plays a short melody on the buzzer (`src/boot_tune.h`),
+looping it until the host sends its **first command** — after that it stays
+silent until the next power-up. Any alert beep is a command, so the tune never
+competes with the monitor.
+
+The melody is generated from an audio file by `tools/mp3_to_tune.py` (ffmpeg +
+stdlib only: it extracts a monophonic pitch line with a small YIN tracker, snaps
+it to notes, and writes the `{freq, ms}` header plus a square-wave **preview
+WAV** so you can listen before flashing). Extracting one note line from a full
+mix is rough by design — preview and tweak, or hand-edit the header.
+
+```bash
+python tools/mp3_to_tune.py song.mp3 --secs 15 --out src/boot_tune.h
+aplay /tmp/boot_tune.wav        # listen, then rebuild + flash
+```
+
+You can also play tunes from the host over the protocol with `tools/play.py`
+(e.g. `python tools/play.py /dev/ttyACM0 ode`).
 
 ## Technical notes (lessons learned)
 

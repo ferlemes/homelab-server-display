@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <U8g2lib.h>
 #include "images.h"
+#include "boot_tune.h"
 #include "esp_log.h"
 
 // ============================================================
@@ -36,6 +37,13 @@ static const uint8_t* fontOf(FontId f) {
 uint32_t buzzerOffAt = 0;                    // 0 = no scheduled stop
 bool     ledBlink = false, ledState = false;
 uint32_t ledPeriod = 500, ledLastToggle = 0;
+
+// ---- Boot melody ----
+// Plays on the buzzer from power-up, looping, until the FIRST command arrives;
+// then it stays silent until the next power-up (see src/boot_tune.h).
+bool     bootTuneOn = true;
+uint16_t bootIdx = 0;
+uint32_t bootNoteEnd = 0;
 
 // ---- Line buffer and parser ----
 static char  lineBuf[260];
@@ -89,6 +97,9 @@ static void processLine() {
   while (*cur == ' ' || *cur == '\t') cur++;
   if (*cur == 0)   return;                    // empty line -> no response
   if (*cur == '#') return;                    // comment    -> no response
+
+  // the first real command silences the boot melody for good
+  if (bootTuneOn) { bootTuneOn = false; ledcWrite(BUZZER_CH, 0); }
 
   curId = nullptr;
   if (*cur == '@') curId = nextToken();       // optional id, echoed in the response
@@ -210,6 +221,17 @@ void setup() {
 }
 
 void loop() {
+  // 0) boot melody: step through the notes (looping) until the first command
+  if (bootTuneOn && (int32_t)(millis() - bootNoteEnd) >= 0) {
+    if (bootIdx >= BOOT_TUNE_LEN) bootIdx = 0;       // loop while still idle
+    uint16_t f = BOOT_TUNE[bootIdx][0];
+    uint16_t d = BOOT_TUNE[bootIdx][1];
+    if (f >= 50) ledcWriteTone(BUZZER_CH, f);
+    else         ledcWrite(BUZZER_CH, 0);            // rest
+    bootNoteEnd = millis() + d;
+    bootIdx++;
+  }
+
   // 1) read lines from serial and process them
   while (Serial.available()) {
     char c = Serial.read();

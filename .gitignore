@@ -3,6 +3,10 @@
 *.bin
 *.elf
 
+# scratch audio: only used to generate src/boot_tune.h, never committed
+*.mp3
+*.wav
+
 # Python
 __pycache__/
 *.pyc
